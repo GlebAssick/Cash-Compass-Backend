@@ -1,8 +1,16 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from .database import engine, Base, SessionLocal
 from .import models
 from .routers import auth, categories, transactions, budget, bot, recurring, analytics, events, goals, notifications, income, receipts, bank_import, currency, social, cards, group_goals
 app = FastAPI(title="Cash Compass API")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # на этапе разработки разрешаем всем, сузим перед финальным релизом
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 Base.metadata.create_all(bind=engine)
 
