@@ -34,6 +34,7 @@ def register_user(country="RU", education_level="bachelor_1", university=None):
     """Регистрирует нового пользователя со случайным email и возвращает (email, headers)."""
     email = f"pytest_{random.randint(100000, 999999)}@test.com"
     payload = {
+        "name": "Pytest User",
         "email": email,
         "password": "testpass123",
         "country": country,

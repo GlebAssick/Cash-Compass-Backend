@@ -1,0 +1,270 @@
+diff --git a/app/email_service.py b/app/email_service.py
+new file mode 100644
+index 0000000..b1da805
+--- /dev/null
++++ b/app/email_service.py
+@@ -0,0 +1,59 @@
++import os
++import smtplib
++import ssl
++from email.message import EmailMessage
++
++SMTP_HOST = os.getenv("SMTP_HOST")
++SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
++SMTP_USER = os.getenv("SMTP_USER")
++SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
++EMAIL_FROM = os.getenv("EMAIL_FROM", SMTP_USER or "no-reply@cash-compass.app")
++FRONTEND_URL = os.getenv("FRONTEND_URL", "https://cash-compass-ivory.vercel.app")
++
++EMAIL_ENABLED = bool(SMTP_HOST and SMTP_USER and SMTP_PASSWORD)
++
++
++def _send(to_email: str, subject: str, body: str) -> bool:
++    """Send a plain-text email. Returns False (and logs) instead of raising
++    if SMTP isn't configured yet, so callers can degrade gracefully."""
++    if not EMAIL_ENABLED:
++        print(f"[email_service] SMTP not configured, skipping send to {to_email}: {subject}")
++        return False
++
++    msg = EmailMessage()
++    msg["Subject"] = subject
++    msg["From"] = EMAIL_FROM
++    msg["To"] = to_email
++    msg.set_content(body)
++
++    try:
++        context = ssl.create_default_context()
++        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
++            server.starttls(context=context)
++            server.login(SMTP_USER, SMTP_PASSWORD)
++            server.send_message(msg)
++        return True
++    except Exception as exc:
++        print(f"[email_service] Failed to send email to {to_email}: {exc}")
++        return False
++
++
++def send_verification_email(to_email: str, code: str) -> bool:
++    subject = "Cash Compass — confirm your email"
++    body = (
++        f"Your Cash Compass verification code is: {code}\n\n"
++        f"Enter it on the sign up screen to activate your account.\n"
++        f"This code expires in 30 minutes."
++    )
++    return _send(to_email, subject, body)
++
++
++def send_password_reset_email(to_email: str, token: str) -> bool:
++    reset_link = f"{FRONTEND_URL}/reset-password?token={token}"
++    subject = "Cash Compass — reset your password"
++    body = (
++        f"We received a request to reset your Cash Compass password.\n\n"
++        f"Reset it here: {reset_link}\n\n"
++        f"This link expires in 30 minutes. If you didn't request this, ignore this email."
++    )
++    return _send(to_email, subject, body)
+diff --git a/app/models.py b/app/models.py
+index eedbb59..3fb37f4 100644
+--- a/app/models.py
++++ b/app/models.py
+@@ -8,12 +8,18 @@ class User(Base):
+     __tablename__ = "users"
+ 
+     id = Column(Integer, primary_key=True, index=True)
++    name = Column(String(150), nullable=True)
+     email = Column(String(255), unique=True, index=True, nullable=False)
+-    hashed_password = Column(String(255), nullable=False)
++    hashed_password = Column(String(255), nullable=True)
+     country = Column(String(2), nullable=False)
+     education_level = Column(String(50), nullable=True)
+     university = Column(String(150), nullable=True)
+     base_currency = Column(String(3), nullable=False, default="RUB")
++    is_verified = Column(Integer, default=0)
++    verification_code = Column(String(6), nullable=True)
++    verification_code_expires = Column(DateTime(timezone=True), nullable=True)
++    reset_token = Column(String(64), nullable=True)
++    reset_token_expires = Column(DateTime(timezone=True), nullable=True)
+     created_at = Column(DateTime(timezone=True), server_default=func.now())
+ 
+ 
+diff --git a/app/routers/auth.py b/app/routers/auth.py
+index 5286b87..0ada70c 100644
+--- a/app/routers/auth.py
++++ b/app/routers/auth.py
+@@ -1,31 +1,107 @@
++import secrets
++from datetime import datetime, timedelta
+ from fastapi import APIRouter, Depends, HTTPException
+ from sqlalchemy.orm import Session
+-from .. import models, schemas, auth
++from .. import models, schemas, auth, email_service
+ from ..database import get_db
+ 
+ router = APIRouter(prefix="/auth", tags=["auth"])
+ 
++
++@router.get("/me", response_model=schemas.UserOut)
++def get_me(current_user: models.User = Depends(auth.get_current_user)):
++    return current_user
++
++RESET_TOKEN_TTL_MINUTES = 30
++VERIFICATION_CODE_TTL_MINUTES = 30
++
++
+ @router.post("/register", response_model=schemas.Token)
+ def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
+     existing = db.query(models.User).filter(models.User.email == user.email).first()
+     if existing:
+         raise HTTPException(status_code=400, detail="Email уже зарегистрирован")
+-    
++
++    code = f"{secrets.randbelow(1000000):06d}"
++
+     new_user = models.User(
+-    email=user.email,
+-    hashed_password=auth.hash_password(user.password),
+-    country=user.country,
+-    education_level=user.education_level,
+-    university=user.university,
++        name=user.name,
++        email=user.email,
++        hashed_password=auth.hash_password(user.password),
++        country=user.country,
++        education_level=user.education_level,
++        university=user.university,
++        verification_code=code,
++        verification_code_expires=datetime.utcnow() + timedelta(minutes=VERIFICATION_CODE_TTL_MINUTES),
+     )
+-    
++
+     db.add(new_user)
+     db.commit()
+     db.refresh(new_user)
+ 
++    email_service.send_verification_email(new_user.email, code)
++
+     token = auth.create_access_token({"sub": str(new_user.id)})
+     return {"access_token": token}
+ 
++
++@router.post("/verify-email", response_model=schemas.MessageResponse)
++def verify_email(payload: schemas.VerifyEmailRequest, db: Session = Depends(get_db)):
++    user = db.query(models.User).filter(models.User.email == payload.email).first()
++    if not user:
++        raise HTTPException(status_code=404, detail="Пользователь не найден")
++    if user.is_verified:
++        return {"message": "Email уже подтверждён"}
++    if not user.verification_code or user.verification_code != payload.code:
++        raise HTTPException(status_code=400, detail="Неверный код подтверждения")
++    if user.verification_code_expires and user.verification_code_expires < datetime.utcnow():
++        raise HTTPException(status_code=400, detail="Код подтверждения истёк")
++
++    user.is_verified = 1
++    user.verification_code = None
++    user.verification_code_expires = None
++    db.commit()
++    return {"message": "Email подтверждён"}
++
++
++@router.post("/resend-verification", response_model=schemas.MessageResponse)
++def resend_verification(payload: schemas.ResendVerificationRequest, db: Session = Depends(get_db)):
++    user = db.query(models.User).filter(models.User.email == payload.email).first()
++    if user and not user.is_verified:
++        code = f"{secrets.randbelow(1000000):06d}"
++        user.verification_code = code
++        user.verification_code_expires = datetime.utcnow() + timedelta(minutes=VERIFICATION_CODE_TTL_MINUTES)
++        db.commit()
++        email_service.send_verification_email(user.email, code)
++    # Same response whether or not the account exists, so this endpoint can't be used to probe emails
++    return {"message": "Если аккаунт существует, код отправлен повторно"}
++
++
++@router.post("/forgot-password", response_model=schemas.MessageResponse)
++def forgot_password(payload: schemas.ForgotPasswordRequest, db: Session = Depends(get_db)):
++    user = db.query(models.User).filter(models.User.email == payload.email).first()
++    if user:
++        token = secrets.token_urlsafe(32)
++        user.reset_token = token
++        user.reset_token_expires = datetime.utcnow() + timedelta(minutes=RESET_TOKEN_TTL_MINUTES)
++        db.commit()
++        email_service.send_password_reset_email(user.email, token)
++    # Same response whether or not the account exists, so this endpoint can't be used to probe emails
++    return {"message": "Если аккаунт существует, письмо со ссылкой отправлено"}
++
++
++@router.post("/reset-password", response_model=schemas.MessageResponse)
++def reset_password(payload: schemas.ResetPasswordRequest, db: Session = Depends(get_db)):
++    user = db.query(models.User).filter(models.User.reset_token == payload.token).first()
++    if not user or not user.reset_token_expires or user.reset_token_expires < datetime.utcnow():
++        raise HTTPException(status_code=400, detail="Ссылка недействительна или истекла")
++
++    user.hashed_password = auth.hash_password(payload.new_password)
++    user.reset_token = None
++    user.reset_token_expires = None
++    db.commit()
++    return {"message": "Пароль обновлён"}
++
+ @router.post("/login", response_model=schemas.Token)
+ def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
+     user = db.query(models.User).filter(models.User.email == credentials.email).first()
+diff --git a/app/schemas.py b/app/schemas.py
+index 1426db8..0f5f09d 100644
+--- a/app/schemas.py
++++ b/app/schemas.py
+@@ -1,6 +1,7 @@
+ from pydantic import BaseModel, EmailStr, Field
+ 
+ class UserCreate(BaseModel):
++    name: str
+     email: EmailStr
+     password: str
+     country: str
+@@ -15,6 +16,36 @@ class Token(BaseModel):
+     access_token: str
+     token_type: str = "bearer"
+ 
++class ForgotPasswordRequest(BaseModel):
++    email: EmailStr
++
++class ResetPasswordRequest(BaseModel):
++    token: str
++    new_password: str
++
++class VerifyEmailRequest(BaseModel):
++    email: EmailStr
++    code: str
++
++class ResendVerificationRequest(BaseModel):
++    email: EmailStr
++
++class MessageResponse(BaseModel):
++    message: str
++
++class UserOut(BaseModel):
++    id: int
++    name: str | None
++    email: EmailStr
++    country: str
++    education_level: str | None
++    university: str | None
++    base_currency: str
++    is_verified: bool
++
++    class Config:
++        from_attributes = True
++
+ from decimal import Decimal
+ from datetime import datetime
+ from .models import TransactionType
+diff --git a/tests/test_main.py b/tests/test_main.py
+index 387ae6b..f5db25b 100644
+--- a/tests/test_main.py
++++ b/tests/test_main.py
+@@ -34,6 +34,7 @@ def register_user(country="RU", education_level="bachelor_1", university=None):
+     """Регистрирует нового пользователя со случайным email и возвращает (email, headers)."""
+     email = f"pytest_{random.randint(100000, 999999)}@test.com"
+     payload = {
++        "name": "Pytest User",
+         "email": email,
+         "password": "testpass123",
+         "country": country,

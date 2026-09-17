@@ -1,6 +1,7 @@
 from pydantic import BaseModel, EmailStr, Field
 
 class UserCreate(BaseModel):
+    name: str
     email: EmailStr
     password: str
     country: str
@@ -14,6 +15,36 @@ class UserLogin(BaseModel):
 class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+class VerifyEmailRequest(BaseModel):
+    email: EmailStr
+    code: str
+
+class ResendVerificationRequest(BaseModel):
+    email: EmailStr
+
+class MessageResponse(BaseModel):
+    message: str
+
+class UserOut(BaseModel):
+    id: int
+    name: str | None
+    email: EmailStr
+    country: str
+    education_level: str | None
+    university: str | None
+    base_currency: str
+    is_verified: bool
+
+    class Config:
+        from_attributes = True
 
 from decimal import Decimal
 from datetime import datetime
