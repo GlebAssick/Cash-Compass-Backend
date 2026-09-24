@@ -133,6 +133,8 @@ class Notification(Base):
     message = Column(String(255), nullable=False)
     is_read = Column(Integer, default=0)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    recurring_id = Column(Integer, ForeignKey("recurring_expenses.id"), nullable=True)
+    due_date = Column(Date, nullable=True)
 
 class IncomeSource(Base):
     __tablename__ = "income_sources"

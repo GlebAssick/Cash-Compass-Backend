@@ -112,3 +112,58 @@ def detect_wasteful_subscriptions(db: Session = Depends(get_db), current_user: m
                 })
 
     return {"findings": findings, "count": len(findings)}
+
+
+from datetime import date, timedelta
+import calendar
+
+def _next_renewal(day_of_month: int, today: date) -> date:
+    year, month = today.year, today.month
+    last_day = calendar.monthrange(year, month)[1]
+    candidate = date(year, month, min(day_of_month, last_day))
+    if candidate < today:
+        month += 1
+        if month > 12:
+            month, year = 1, year + 1
+        last_day = calendar.monthrange(year, month)[1]
+        candidate = date(year, month, min(day_of_month, last_day))
+    return candidate
+
+REMINDER_THRESHOLD_DAYS = 3
+
+@router.get("/upcoming-renewals")
+def get_upcoming_renewals(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    today = date.today()
+    active = db.query(models.RecurringExpense).filter(
+        models.RecurringExpense.user_id == current_user.id,
+        models.RecurringExpense.is_active == 1,
+    ).all()
+
+    results = []
+    for r in active:
+        renewal = _next_renewal(r.day_of_month, today)
+        days_until = (renewal - today).days
+        results.append({
+            "recurring_id": r.id,
+            "name": r.name,
+            "amount": r.amount,
+            "renewal_date": renewal,
+            "days_until": days_until,
+        })
+
+        if days_until <= REMINDER_THRESHOLD_DAYS:
+            exists = db.query(models.Notification).filter(
+                models.Notification.user_id == current_user.id,
+                models.Notification.recurring_id == r.id,
+                models.Notification.due_date == renewal,
+            ).first()
+            if not exists:
+                db.add(models.Notification(
+                    user_id=current_user.id,
+                    recurring_id=r.id,
+                    due_date=renewal,
+                    message=f'"{r.name}" продлится {renewal.strftime("%d.%m.%Y")} на сумму {r.amount}.',
+                ))
+                db.commit()
+
+    return sorted(results, key=lambda x: x["days_until"])

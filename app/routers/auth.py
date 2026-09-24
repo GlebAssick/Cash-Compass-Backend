@@ -110,3 +110,57 @@ def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
 
     token = auth.create_access_token({"sub": str(user.id)})
     return {"access_token": token}
+
+import httpx
+import secrets as _secrets
+
+
+def _issue_token_for_email(db: Session, email: str, name: str | None, country: str | None) -> str:
+    user = db.query(models.User).filter(models.User.email == email).first()
+    if not user:
+        user = models.User(
+            name=name or email.split("@")[0],
+            email=email,
+            hashed_password=None,
+            country=country,
+            is_verified=1,
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+    return auth.create_access_token({"sub": str(user.id)})
+
+
+@router.post("/oauth/google", response_model=schemas.Token)
+def oauth_google(payload: schemas.GoogleOAuthRequest, db: Session = Depends(get_db)):
+    resp = httpx.get(
+        "https://oauth2.googleapis.com/tokeninfo",
+        params={"id_token": payload.id_token},
+        timeout=10,
+    )
+    if resp.status_code != 200:
+        raise HTTPException(status_code=401, detail="Invalid Google token")
+    data = resp.json()
+    email = data.get("email")
+    if not email:
+        raise HTTPException(status_code=401, detail="Google token missing email")
+    token = _issue_token_for_email(db, email, data.get("name"), None)
+    return {"access_token": token}
+
+
+@router.post("/oauth/yandex", response_model=schemas.Token)
+def oauth_yandex(payload: schemas.YandexOAuthRequest, db: Session = Depends(get_db)):
+    resp = httpx.get(
+        "https://login.yandex.ru/info",
+        headers={"Authorization": f"OAuth {payload.access_token}"},
+        timeout=10,
+    )
+    if resp.status_code != 200:
+        raise HTTPException(status_code=401, detail="Invalid Yandex token")
+    data = resp.json()
+    email = data.get("default_email") or (data.get("emails") or [None])[0]
+    if not email:
+        raise HTTPException(status_code=401, detail="Yandex account has no accessible email")
+    name = data.get("real_name") or data.get("display_name")
+    token = _issue_token_for_email(db, email, name, payload.country)
+    return {"access_token": token}

@@ -275,3 +275,11 @@ class GroupGoalJoin(BaseModel):
 
 class GroupGoalContributeRequest(BaseModel):
     amount: Decimal        
+
+
+class GoogleOAuthRequest(BaseModel):
+    id_token: str
+
+class YandexOAuthRequest(BaseModel):
+    access_token: str
+    country: str | None = None
