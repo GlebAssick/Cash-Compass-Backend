@@ -1,42 +1,49 @@
 import os
-import smtplib
-import ssl
-from email.message import EmailMessage
+import json
+import urllib.request
+import urllib.error
 
-SMTP_HOST = os.getenv("SMTP_HOST")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-SMTP_USER = os.getenv("SMTP_USER")
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
-EMAIL_FROM = os.getenv("EMAIL_FROM", SMTP_USER or "no-reply@cash-compass.app")
-FRONTEND_URL = os.getenv("FRONTEND_URL", "https://cash-compass-ivory.vercel.app")
+# Берем ключ из RESEND_API_KEY или fallback на SMTP_PASSWORD
+RESEND_API_KEY = os.getenv("RESEND_API_KEY") or os.getenv("SMTP_PASSWORD")
+EMAIL_FROM = os.getenv("EMAIL_FROM", "onboarding@resend.dev")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "https://cash-compass-gleb.vercel.app")
 
-EMAIL_ENABLED = bool(SMTP_HOST and SMTP_USER and SMTP_PASSWORD)
-
+RESEND_API_URL = "https://api.resend.com/emails"
+EMAIL_ENABLED = bool(RESEND_API_KEY)
 
 def _send(to_email: str, subject: str, body: str) -> bool:
-    """Send a plain-text email. Returns False (and logs) instead of raising
-    if SMTP isn't configured yet, so callers can degrade gracefully."""
+    """Send email via Resend REST API (HTTPS port 443 — not blocked by Railway)."""
     if not EMAIL_ENABLED:
-        print(f"[email_service] SMTP not configured, skipping send to {to_email}: {subject}")
+        print(f"[email_service] Resend API key not configured, skipping send to {to_email}: {subject}")
         return False
 
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = EMAIL_FROM
-    msg["To"] = to_email
-    msg.set_content(body)
+    headers = {
+        "Authorization": f"Bearer {RESEND_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "from": EMAIL_FROM,
+        "to": [to_email],
+        "subject": subject,
+        "text": body,
+    }
 
     try:
-        context = ssl.create_default_context()
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as server:
-            server.starttls(context=context)
-            server.login(SMTP_USER, SMTP_PASSWORD)
-            server.send_message(msg)
-        return True
+        req = urllib.request.Request(
+            RESEND_API_URL,
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=15) as response:
+            print(f"[email_service] Email sent successfully to {to_email}: {subject}")
+            return True
+    except urllib.error.HTTPError as e:
+        print(f"[email_service] Resend API HTTP error for {to_email}: {e.code} {e.read().decode('utf-8')}")
+        return False
     except Exception as exc:
         print(f"[email_service] Failed to send email to {to_email}: {exc}")
         return False
-
 
 def send_verification_email(to_email: str, code: str) -> bool:
     subject = "Cash Compass — confirm your email"
@@ -46,7 +53,6 @@ def send_verification_email(to_email: str, code: str) -> bool:
         f"This code expires in 30 minutes."
     )
     return _send(to_email, subject, body)
-
 
 def send_password_reset_email(to_email: str, token: str) -> bool:
     reset_link = f"{FRONTEND_URL}/reset-password?token={token}"
