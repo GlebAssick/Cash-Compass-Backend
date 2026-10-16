@@ -3,13 +3,13 @@ import json
 import urllib.request
 import urllib.error
 
-# Берем ключ из RESEND_API_KEY или fallback на SMTP_PASSWORD
 RESEND_API_KEY = os.getenv("RESEND_API_KEY") or os.getenv("SMTP_PASSWORD")
 EMAIL_FROM = os.getenv("EMAIL_FROM", "onboarding@resend.dev")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "https://cash-compass-gleb.vercel.app")
 
 RESEND_API_URL = "https://api.resend.com/emails"
 EMAIL_ENABLED = bool(RESEND_API_KEY)
+
 
 def _send(to_email: str, subject: str, body: str) -> bool:
     """Send email via Resend REST API (HTTPS port 443 — not blocked by Railway)."""
@@ -45,6 +45,7 @@ def _send(to_email: str, subject: str, body: str) -> bool:
         print(f"[email_service] Failed to send email to {to_email}: {exc}")
         return False
 
+
 def send_verification_email(to_email: str, code: str) -> bool:
     subject = "Cash Compass — confirm your email"
     body = (
@@ -53,6 +54,7 @@ def send_verification_email(to_email: str, code: str) -> bool:
         f"This code expires in 30 minutes."
     )
     return _send(to_email, subject, body)
+
 
 def send_password_reset_email(to_email: str, token: str) -> bool:
     reset_link = f"{FRONTEND_URL}/reset-password?token={token}"
