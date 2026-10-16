@@ -1,35 +1,56 @@
 import os
-import smtplib
-from email.mime.text import MIMEText
+import base64
+import urllib.request
+import urllib.error
 
-SMTP_HOST = os.getenv("SMTP_HOST", "sandbox.smtp.mailtrap.io")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "2525"))
-SMTP_USER = os.getenv("SMTP_USER", "")
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+MAILGUN_API_KEY = os.getenv("MAILGUN_API_KEY", "")
+MAILGUN_DOMAIN = os.getenv("MAILGUN_DOMAIN", "")
 EMAIL_FROM = os.getenv("EMAIL_FROM", "noreply@cashcompass.test")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "https://cash-compass-gleb.vercel.app")
 
-EMAIL_ENABLED = bool(SMTP_USER and SMTP_PASSWORD)
+EMAIL_ENABLED = bool(MAILGUN_API_KEY and MAILGUN_DOMAIN)
 
 
 def _send(to_email: str, subject: str, body: str) -> bool:
-    """Send email via Mailtrap sandbox SMTP (port 2525 — not blocked by Railway)."""
+    """Send email via Mailgun HTTPS API (port 443 — not blocked by Railway)."""
     if not EMAIL_ENABLED:
-        print(f"[email_service] SMTP not configured, skipping send to {to_email}: {subject}")
+        print(f"[email_service] Mailgun not configured, skipping send to {to_email}: {subject}")
         return False
 
-    msg = MIMEText(body, "plain", "utf-8")
-    msg["From"] = f"Cash Compass <{EMAIL_FROM}>"
-    msg["To"] = to_email
-    msg["Subject"] = subject
+    url = f"https://api.mailgun.net/v3/{MAILGUN_DOMAIN}/messages"
+    credentials = base64.b64encode(f"api:{MAILGUN_API_KEY}".encode()).decode()
+
+    boundary = "----CashCompassBoundary7MA4YWxkTrZu0gW"
+    fields = [
+        ("from", f"Cash Compass <{EMAIL_FROM}>"),
+        ("to", to_email),
+        ("subject", subject),
+        ("text", body),
+    ]
+
+    parts = []
+    for name, value in fields:
+        parts.append(f"--{boundary}".encode())
+        parts.append(f'Content-Disposition: form-data; name="{name}"'.encode())
+        parts.append(b"")
+        parts.append(value.encode("utf-8"))
+    parts.append(f"--{boundary}--".encode())
+    parts.append(b"")
+    payload = b"\r\n".join(parts)
+
+    headers = {
+        "Authorization": f"Basic {credentials}",
+        "Content-Type": f"multipart/form-data; boundary={boundary}",
+    }
 
     try:
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
-            server.starttls()
-            server.login(SMTP_USER, SMTP_PASSWORD)
-            server.sendmail(EMAIL_FROM, [to_email], msg.as_string())
-        print(f"[email_service] Email sent successfully to {to_email}: {subject}")
-        return True
+        req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=15) as response:
+            print(f"[email_service] Email sent successfully to {to_email}: {subject}")
+            return True
+    except urllib.error.HTTPError as e:
+        print(f"[email_service] Mailgun API HTTP error for {to_email}: {e.code} {e.read().decode('utf-8')}")
+        return False
     except Exception as exc:
         print(f"[email_service] Failed to send email to {to_email}: {exc}")
         return False
