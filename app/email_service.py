@@ -1,46 +1,35 @@
 import os
-import json
-import urllib.request
-import urllib.error
+import smtplib
+from email.mime.text import MIMEText
 
-RESEND_API_KEY = os.getenv("RESEND_API_KEY") or os.getenv("SMTP_PASSWORD")
-EMAIL_FROM = os.getenv("EMAIL_FROM", "onboarding@resend.dev")
+SMTP_HOST = os.getenv("SMTP_HOST", "sandbox.smtp.mailtrap.io")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "2525"))
+SMTP_USER = os.getenv("SMTP_USER", "")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+EMAIL_FROM = os.getenv("EMAIL_FROM", "noreply@cashcompass.test")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "https://cash-compass-gleb.vercel.app")
 
-RESEND_API_URL = "https://api.resend.com/emails"
-EMAIL_ENABLED = bool(RESEND_API_KEY)
+EMAIL_ENABLED = bool(SMTP_USER and SMTP_PASSWORD)
 
 
 def _send(to_email: str, subject: str, body: str) -> bool:
-    """Send email via Resend REST API (HTTPS port 443 — not blocked by Railway)."""
+    """Send email via Mailtrap sandbox SMTP (port 2525 — not blocked by Railway)."""
     if not EMAIL_ENABLED:
-        print(f"[email_service] Resend API key not configured, skipping send to {to_email}: {subject}")
+        print(f"[email_service] SMTP not configured, skipping send to {to_email}: {subject}")
         return False
 
-    headers = {
-        "Authorization": f"Bearer {RESEND_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "from": EMAIL_FROM,
-        "to": [to_email],
-        "subject": subject,
-        "text": body,
-    }
+    msg = MIMEText(body, "plain", "utf-8")
+    msg["From"] = f"Cash Compass <{EMAIL_FROM}>"
+    msg["To"] = to_email
+    msg["Subject"] = subject
 
     try:
-        req = urllib.request.Request(
-            RESEND_API_URL,
-            data=json.dumps(payload).encode("utf-8"),
-            headers=headers,
-            method="POST"
-        )
-        with urllib.request.urlopen(req, timeout=15) as response:
-            print(f"[email_service] Email sent successfully to {to_email}: {subject}")
-            return True
-    except urllib.error.HTTPError as e:
-        print(f"[email_service] Resend API HTTP error for {to_email}: {e.code} {e.read().decode('utf-8')}")
-        return False
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASSWORD)
+            server.sendmail(EMAIL_FROM, [to_email], msg.as_string())
+        print(f"[email_service] Email sent successfully to {to_email}: {subject}")
+        return True
     except Exception as exc:
         print(f"[email_service] Failed to send email to {to_email}: {exc}")
         return False
