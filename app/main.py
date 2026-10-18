@@ -1,14 +1,34 @@
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
 from .database import engine, Base, SessionLocal
-from .import models
-from .routers import auth, categories, transactions, budget, bot, recurring, analytics, events, goals, notifications, income, receipts, bank_import, currency, social, cards, group_goals
+from . import models
+from .routers import (
+    auth, categories, transactions, budget, bot, recurring, analytics,
+    events, goals, notifications, income, receipts, bank_import,
+    currency, social, cards, group_goals,
+)
+
 app = FastAPI(title="Cash Compass API")
+
+# CORS: точный список разрешённых origin. По умолчанию — прод-фронт.
+# Для локального OAuth-теста через https-туннель добавь его домен в
+# переменную окружения CORS_ORIGINS на Railway (через запятую), например:
+#   CORS_ORIGINS=https://cash-compass-gleb.vercel.app,https://xxxx.trycloudflare.com
+_DEFAULT_CORS_ORIGINS = "https://cash-compass-gleb.vercel.app"
+_cors_origins = [
+    o.strip()
+    for o in os.getenv("CORS_ORIGINS", _DEFAULT_CORS_ORIGINS).split(",")
+    if o.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # на этапе разработки разрешаем всем, сузим перед финальным релизом
+    allow_origins=_cors_origins,   # было [""] — пустая строка вешала весь CORS
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["*"],           # было [""]
     allow_headers=["*"],
 )
 
@@ -32,6 +52,7 @@ app.include_router(social.router, prefix="/api/v1")
 app.include_router(cards.router, prefix="/api/v1")
 app.include_router(group_goals.router, prefix="/api/v1")
 
+
 @app.on_event("startup")
 def seed_categories():
     db = SessionLocal()
@@ -43,6 +64,7 @@ def seed_categories():
         db.commit()
     db.close()
 
+
 @app.on_event("startup")
 def seed_events():
     from datetime import date
@@ -50,13 +72,20 @@ def seed_events():
     existing = db.query(models.Event).count()
     if existing == 0:
         events = [
-            models.Event(country="RU", name="Новый год", event_date=date(2026, 1, 1), warning_message="Скоро Новый год — обычно траты заметно выше."),
-            models.Event(country="RU", name="Начало зимней сессии", event_date=date(2026, 1, 15), warning_message="Экзаменационный период — учтите расходы на подготовку."),
-            models.Event(country="RU", name="Стипендия", event_date=date(2026, 1, 25), warning_message="Обычно приходит стипендия в эти дни."),
-            models.Event(country="RU", name="Начало летней сессии", event_date=date(2026, 6, 1), warning_message="Экзаменационный период — учтите расходы на подготовку."),
-            models.Event(country="IN", name="Diwali", event_date=date(2026, 11, 1), warning_message="Скоро Diwali — обычно траты заметно выше."),
-            models.Event(country="IN", name="Начало сессии", event_date=date(2026, 12, 1), warning_message="Экзаменационный период — учтите расходы на подготовку."),
-            models.Event(country="IN", name="Holi", event_date=date(2026, 3, 1), warning_message="Скоро Holi — обычно траты заметно выше."),
+            models.Event(country="RU", name="Новый год", event_date=date(2026, 1, 1),
+                         warning_message="Скоро Новый год — обычно траты заметно выше."),
+            models.Event(country="RU", name="Начало зимней сессии", event_date=date(2026, 1, 15),
+                         warning_message="Экзаменационный период — учтите расходы на подготовку."),
+            models.Event(country="RU", name="Стипендия", event_date=date(2026, 1, 25),
+                         warning_message="Обычно приходит стипендия в эти дни."),
+            models.Event(country="RU", name="Начало летней сессии", event_date=date(2026, 6, 1),
+                         warning_message="Экзаменационный период — учтите расходы на подготовку."),
+            models.Event(country="IN", name="Diwali", event_date=date(2026, 11, 1),
+                         warning_message="Скоро Diwali — обычно траты заметно выше."),
+            models.Event(country="IN", name="Начало сессии", event_date=date(2026, 12, 1),
+                         warning_message="Экзаменационный период — учтите расходы на подготовку."),
+            models.Event(country="IN", name="Holi", event_date=date(2026, 3, 1),
+                         warning_message="Скоро Holi — обычно траты заметно выше."),
         ]
         db.add_all(events)
         db.commit()
