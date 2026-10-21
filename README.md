@@ -195,3 +195,8 @@ pytest -v
 - Конвертация валют реализована в ключевых расчётах (бюджет, соц. сравнение), но не протянута во все агрегации (например, графики в `analytics.py` пока считают без конвертации)
 - Функция рассылки бота (`/bot/broadcast-comments`) вызывается вручную или потребует внешнего планировщика (cron) для регулярного автозапуска — сама логика уже реализована
 - `CORS` временно открыт для всех источников (`allow_origins=["*"]`) на этапе интеграции с фронтендом, для финального релиза стоит сузить до конкретных доменов
+
+
+## Related
+- Web app: https://github.com/glebassick/cash-compass-web-site  (live: https://cash-compass-gleb.vercel.app)
+- Backend: https://github.com/glebassick/Cash-Compass-Backend (live: https://cash-compass-backend-production.up.railway.app/docs)
